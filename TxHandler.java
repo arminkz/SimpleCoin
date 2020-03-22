@@ -1,5 +1,11 @@
+import java.security.PublicKey;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
+
 public class TxHandler {
 
+    private UTXOPool curPool;
     /**
      * Creates a public ledger whose current UTXOPool (collection of unspent transaction outputs) is
      * {@code utxoPool}. This should make a copy of utxoPool by using the UTXOPool(UTXOPool uPool)
@@ -7,6 +13,7 @@ public class TxHandler {
      */
     public TxHandler(UTXOPool utxoPool) {
         // IMPLEMENT THIS
+        curPool = new UTXOPool(utxoPool);
     }
 
     /**
@@ -20,6 +27,63 @@ public class TxHandler {
      */
     public boolean isValidTx(Transaction tx) {
         // IMPLEMENT THIS
+        ArrayList<Transaction.Input> inputs = tx.getInputs();
+        ArrayList<Transaction.Output> outputs = tx.getOutputs();
+        HashSet<UTXO> spents = new HashSet<>();
+
+        double totalInValue = 0;
+        double totalOutValue = 0;
+
+        for (int i = 0; i < inputs.size(); i++) {
+            Transaction.Input in = inputs.get(i);
+            UTXO u = new UTXO(in.prevTxHash,in.outputIndex);
+            if(!curPool.contains(u)){
+                // not in current pool
+                return false;
+            }
+            PublicKey pb = curPool.getTxOutput(u).address;
+            if(!Crypto.verifySignature(pb,tx.getRawDataToSign(i),in.signature)) {
+                // invalid signature
+                return false;
+            }
+            if(spents.contains(u)){
+                // double spending
+                return false;
+            }
+            spents.add(u);
+
+            totalInValue += curPool.getTxOutput(u).value;
+        }
+
+        for (int i = 0; i < outputs.size(); i++) {
+            Transaction.Output out = outputs.get(i);
+
+            if(out.value < 0) return false; // negative output
+            totalOutValue += out.value;
+        }
+
+        if (totalOutValue > totalInValue) return false;
+
+        return true;
+    }
+
+    private void updatePool(Transaction tx) {
+
+        ArrayList<Transaction.Input> inputs = tx.getInputs();
+        ArrayList<Transaction.Output> outputs = tx.getOutputs();
+
+        // inputs are spent so remove them from pool
+        for (int i = 0; i < inputs.size(); i++) {
+            UTXO u = new UTXO(inputs.get(i).prevTxHash, inputs.get(i).outputIndex);
+            curPool.removeUTXO(u);
+        }
+
+        // add new outputs to pool
+        for (int i = 0; i < outputs.size(); i++) {
+            UTXO u = new UTXO(tx.getHash(), i);
+            curPool.addUTXO(u,outputs.get(i));
+        }
+
     }
 
     /**
@@ -29,6 +93,30 @@ public class TxHandler {
      */
     public Transaction[] handleTxs(Transaction[] possibleTxs) {
         // IMPLEMENT THIS
+        ArrayList<Transaction> result = new ArrayList<>();
+
+        HashSet<Transaction> txs = new HashSet<>(Arrays.asList(possibleTxs));
+        boolean isUpdated = true;
+        while (txs.size() != 0 && isUpdated) {
+            isUpdated = false;
+            HashSet<Transaction> valids = new HashSet<>();
+            for(Transaction tx : txs) {
+                if (isValidTx(tx)) {
+                    valids.add(tx);
+                    updatePool(tx);
+                }
+            }
+
+            if(valids.size() > 0) {
+                isUpdated = true;
+                result.addAll(valids);
+                txs.removeAll(valids);
+            }
+        }
+
+        Transaction[] resultArray = new Transaction[result.size()];
+        result.toArray(resultArray);
+        return resultArray;
     }
 
 }
